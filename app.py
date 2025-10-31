@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import requests
+import pytz
 
 warnings.filterwarnings('ignore')
 
@@ -57,9 +58,63 @@ st.markdown("""
         border: 1px solid #c3e6cb;
         margin: 0.5rem 0;
     }
-    .dy-high { color: #28a745; font-weight: bold; }
-    .dy-medium { color: #ffc107; font-weight: bold; }
-    .dy-low { color: #dc3545; font-weight: bold; }
+    .dy-high { 
+        background-color: #d4edda; 
+        color: #155724; 
+        font-weight: bold; 
+        padding: 2px 6px;
+        border-radius: 3px;
+    }
+    .dy-medium { 
+        background-color: #fff3cd; 
+        color: #856404; 
+        font-weight: bold; 
+        padding: 2px 6px;
+        border-radius: 3px;
+    }
+    .dy-low { 
+        background-color: #f8d7da; 
+        color: #721c24; 
+        font-weight: bold; 
+        padding: 2px 6px;
+        border-radius: 3px;
+    }
+    .pe-low { 
+        background-color: #d4edda; 
+        color: #155724; 
+        font-weight: bold; 
+        padding: 2px 6px;
+        border-radius: 3px;
+    }
+    .pe-medium { 
+        background-color: #fff3cd; 
+        color: #856404; 
+        font-weight: bold; 
+        padding: 2px 6px;
+        border-radius: 3px;
+    }
+    .pe-high { 
+        background-color: #f8d7da; 
+        color: #721c24; 
+        font-weight: bold; 
+        padding: 2px 6px;
+        border-radius: 3px;
+    }
+    .param-card {
+        background-color: #898989;
+        padding: 0.5rem;
+        border-radius: 5px;
+        border-left: 3px solid #1f77b4;
+        margin: 0.5rem 0;
+        font-size: 0.85rem;
+    }
+    .compact-card {
+        background-color: #f8f9fa;
+        padding: 0.75rem;
+        border-radius: 8px;
+        border-left: 4px solid #1f77b4;
+        margin: 0.5rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -94,7 +149,7 @@ def salvar_api_key(api_key):
     try:
         config = carregar_configuracoes()
         config['openai_api_key'] = api_key
-        config['ultima_atualizacao'] = datetime.now().isoformat()
+        config['ultima_atualizacao'] = datetime.now(pytz.timezone('America/Sao_Paulo')).isoformat()
         
         if salvar_configuracoes(config):
             return True
@@ -126,6 +181,16 @@ def remover_api_key():
     except Exception as e:
         st.error(f"Erro ao remover API Key: {e}")
         return False
+
+def obter_horario_brasilia():
+    """Obtém o horário atual de Brasília"""
+    try:
+        tz_brasilia = pytz.timezone('America/Sao_Paulo')
+        agora = datetime.now(tz_brasilia)
+        return agora.strftime('%d/%m/%Y %H:%M')
+    except:
+        # Fallback se pytz não estiver disponível
+        return datetime.now().strftime('%d/%m/%Y %H:%M')
 
 # =============================================================================
 # FUNÇÕES PARA BUSCAR DADOS EM TEMPO REAL COM VARIAÇÃO
@@ -208,7 +273,7 @@ def buscar_dados_macro():
         }
 
 def formatar_dividend_yield(dy):
-    """Formata o dividend yield de forma mais clara"""
+    """Formata o dividend yield com cores condicionais"""
     if dy is None:
         return "N/A"
     
@@ -226,36 +291,154 @@ def formatar_dividend_yield(dy):
             return f"<span class='dy-medium'>{dy_percent:.2f}%</span>"
         else:
             return f"<span class='dy-low'>{dy_percent:.2f}%</span>"
-            
     except:
         return "N/A"
 
-def obter_info_dividendos(ticker):
-    """Obtém informações detalhadas sobre dividendos"""
+def formatar_pe(pe):
+    """Formata o P/L com cores condicionais"""
+    if pe is None or np.isnan(pe):
+        return "N/A"
+    
+    try:
+        # Classifica por cor
+        if pe < 12:
+            return f"<span class='pe-low'>{pe:.1f}</span>"
+        elif pe < 20:
+            return f"<span class='pe-medium'>{pe:.1f}</span>"
+        else:
+            return f"<span class='pe-high'>{pe:.1f}</span>"
+    except:
+        return "N/A"
+
+def obter_info_dividendos_detalhada(ticker, preco_atual=None):
+    """Obtém informações detalhadas sobre dividendos com valores em R$"""
     try:
         tk = yf.Ticker(ticker)
         info = tk.info
         
-        dividend_yield = info.get('dividendYield')
-        trailing_annual_dividend_rate = info.get('trailingAnnualDividendRate')
-        trailing_annual_dividend_yield = info.get('trailingAnnualDividendYield')
+        # Tenta obter dividend yield de várias fontes
+        dividend_yield = (info.get('dividendYield') or 
+                         info.get('trailingDividendYield') or 
+                         info.get('forwardDividendYield') or 
+                         info.get('yield'))
         
-        # Tenta obter os dividendos dos últimos 12 meses
+        # Tenta obter informações específicas de dividendos
+        forward_dividend_rate = info.get('forwardDividendRate')
+        trailing_dividend_rate = info.get('trailingAnnualDividendRate')
+        last_dividend_value = info.get('lastDividendValue')
+        
+        # Busca dados históricos de dividendos
         dividends = tk.dividends
+        ultimo_dividendo = 0
+        total_12m = 0
+        dividendos_recentes = []
+        quantidade_dividendos_12m = 0
+        
+        # Processa dividendos históricos se disponíveis
         if len(dividends) > 0:
-            ultimos_12m = dividends.last('12M')
-            total_12m = ultimos_12m.sum() if not ultimos_12m.empty else 0
-        else:
-            total_12m = 0
+            # Filtra dividendos válidos
+            dividends_validos = dividends[~dividends.isna()]
+            
+            if len(dividends_validos) > 0:
+                # CORREÇÃO DO TIMEZONE: Remove timezone para comparação
+                dividends_index_no_tz = dividends_validos.index.tz_localize(None)
+                dividends_validos_no_tz = pd.Series(dividends_validos.values, index=dividends_index_no_tz)
+                
+                # Último dividendo
+                ultimo_dividendo = float(dividends_validos_no_tz.iloc[-1])
+                
+                # Dividendos dos últimos 12 meses (sem timezone)
+                data_limite = datetime.now() - timedelta(days=365)
+                dividendos_12m = dividends_validos_no_tz[dividends_validos_no_tz.index >= data_limite]
+                quantidade_dividendos_12m = len(dividendos_12m)
+                total_12m = float(dividendos_12m.sum()) if not dividendos_12m.empty else 0
+                
+                # Últimos 3 dividendos
+                dividendos_recentes = [float(div) for div in dividends_validos_no_tz.tail(3)]
+        
+        # Se não encontrou dividendos no histórico, tenta usar outras fontes
+        if ultimo_dividendo == 0:
+            # Prioridade: forwardDividendRate, depois trailing, depois lastDividendValue
+            if forward_dividend_rate and forward_dividend_rate > 0:
+                ultimo_dividendo = forward_dividend_rate
+            elif trailing_dividend_rate and trailing_dividend_rate > 0:
+                ultimo_dividendo = trailing_dividend_rate
+            elif last_dividend_value and last_dividend_value > 0:
+                ultimo_dividendo = last_dividend_value
+        
+        # Para FIIs, ajusta o cálculo se o dividendo for anual
+        if ultimo_dividendo > 1 and ticker.endswith('.SA') and any(x in ticker for x in ['11', '12']):
+            # Se parece ser um dividendo anual grande, divide por 12
+            if ultimo_dividendo > preco_atual * 0.05:  # Mais de 5% do preço
+                ultimo_dividendo = ultimo_dividendo / 12
+        
+        # Calcula total dos últimos 12 meses se não disponível
+        if total_12m == 0 and dividend_yield and preco_atual:
+            if dividend_yield < 1:  # Está em decimal
+                total_12m = dividend_yield * preco_atual
+            else:  # Está em porcentagem
+                total_12m = (dividend_yield / 100) * preco_atual
+        
+        # Para FIIs, estima quantidade de pagamentos se não disponível
+        if quantidade_dividendos_12m == 0 and ticker.endswith('.SA') and any(x in ticker for x in ['11', '12']):
+            quantidade_dividendos_12m = 12  # FIIs geralmente pagam mensalmente
         
         return {
             'dividend_yield': dividend_yield,
-            'dividend_rate': trailing_annual_dividend_rate,
+            'ultimo_dividendo': ultimo_dividendo,
             'total_12m': total_12m,
-            'ultimo_dividendo': dividends.iloc[-1] if len(dividends) > 0 else 0
+            'dividendos_recentes': dividendos_recentes,
+            'quantidade_dividendos_12m': quantidade_dividendos_12m,
+            'forward_dividend_rate': forward_dividend_rate,
+            'trailing_dividend_rate': trailing_dividend_rate
         }
-    except:
-        return None
+    except Exception as e:
+        print(f"Erro ao obter dividendos para {ticker}: {e}")
+        return {
+            'dividend_yield': 0,
+            'ultimo_dividendo': 0,
+            'total_12m': 0,
+            'dividendos_recentes': [],
+            'quantidade_dividendos_12m': 0,
+            'forward_dividend_rate': 0,
+            'trailing_dividend_rate': 0
+        }
+
+def obter_parametros_por_classe(classe):
+    """Retorna os parâmetros mais importantes para cada classe de ativo"""
+    parametros = {
+        "Ação BR": [
+            "📊 P/L (Preço/Lucro) - Valuation da empresa",
+            "💰 Dividend Yield - Retorno via dividendos", 
+            "📈 Crescimento de Receita e Lucro",
+            "🏢 Setor e Posicionamento no mercado"
+        ],
+        "FII": [
+            "🏢 Tipo de Fundo (Tijolo, Papel, Híbrido)",
+            "💰 Dividend Yield - Rendimento mensal",
+            "📊 P/VP (Preço/Valor Patrimonial)",
+            "📍 Localização e Qualidade dos Imóveis"
+        ],
+        "BDR": [
+            "🌎 Saúde Financeira da Empresa Global",
+            "📊 P/L - Valuation internacional",
+            "💰 Política de Dividendos Global",
+            "🔄 Exposição Cambial (Dólar)"
+        ],
+        "ETF": [
+            "📊 Taxa de Administração",
+            "🔄 Diversificação da Carteira",
+            "📈 Tracking Error - Aderência ao índice",
+            "💰 Dividend Yield - Distribuição"
+        ],
+        "Renda Fixa": [
+            "💰 Taxa de Juros Real (CDI - IPCA)",
+            "📅 Duração e Liquidez",
+            "🛡️ Garantia (FGC, Tesouro, etc.)",
+            "📊 Rentabilidade Líquida"
+        ]
+    }
+    return parametros.get(classe, ["📈 Análise Técnica e Fundamentalista"])
 
 # =============================================================================
 # FUNÇÕES PRINCIPAIS DO SISTEMA
@@ -284,7 +467,7 @@ def descobrir_ativos_automaticamente():
 
 @st.cache_data(ttl=1800)  # Cache de 30 minutos
 def coletar_indicadores(ticker, period="6mo"):
-    """Coleta dados do Yahoo Finance"""
+    """Coleta dados do Yahoo Finance com informações detalhadas de dividendos"""
     try:
         if ticker in ['CDI', 'SELIC', 'IPCA']:
             dados_macro = buscar_dados_macro()
@@ -298,7 +481,8 @@ def coletar_indicadores(ticker, period="6mo"):
                 'classe': 'Renda Fixa',
                 'nome': f'Taxa {ticker}',
                 'volume': None,
-                'info_dividendos': None
+                'info_dividendos': None,
+                'parametros_classe': obter_parametros_por_classe('Renda Fixa')
             }
         
         tk = yf.Ticker(ticker)
@@ -323,8 +507,9 @@ def coletar_indicadores(ticker, period="6mo"):
         latest = hist.iloc[-1]
         info = tk.info
         
-        # Informações detalhadas de dividendos
-        info_dividendos = obter_info_dividendos(ticker)
+        # Informações detalhadas de dividendos - CORREÇÃO: passa o preço atual
+        preco_atual = float(latest['Close'])
+        info_dividendos = obter_info_dividendos_detalhada(ticker, preco_atual)
         
         # Determinar classe
         if '.SA' in ticker:
@@ -337,10 +522,13 @@ def coletar_indicadores(ticker, period="6mo"):
         else:
             classe = "Ação EUA"
         
+        # Obter parâmetros específicos da classe
+        parametros_classe = obter_parametros_por_classe(classe)
+        
         return {
             'ticker': ticker,
             'classe': classe,
-            'price': float(latest['Close']),
+            'price': preco_atual,
             'sma20': float(latest['SMA20']) if not np.isnan(latest['SMA20']) else None,
             'sma50': float(latest['SMA50']) if not np.isnan(latest['SMA50']) else None,
             'rsi14': float(latest['RSI']) if not np.isnan(latest['RSI']) else None,
@@ -349,7 +537,8 @@ def coletar_indicadores(ticker, period="6mo"):
             'sector': info.get('sector', 'N/A'),
             'nome': info.get('longName', ticker),
             'volume': float(latest['Volume']) if 'Volume' in latest else None,
-            'info_dividendos': info_dividendos
+            'info_dividendos': info_dividendos,
+            'parametros_classe': parametros_classe
         }
     except Exception as e:
         print(f"Erro ao coletar {ticker}: {e}")
@@ -453,7 +642,7 @@ def analisar_com_gpt(df, strategy, horizon, api_key):
         
         CONTEXTO MACRO ATUAL:
         - CDI: 13.31% a.a. | Selic: 13.31% a.a. | IPCA: 4.25% a.a.
-        - Ibovespa: 147.676 pts | Dólar: R$ 5,36
+        - Ibovespa: 148.633 pts | Dólar: R$ 5,36
         - Cenário: Juros altos, inflação controlada
         
         Forneça uma análise com:
@@ -462,6 +651,7 @@ def analisar_com_gpt(df, strategy, horizon, api_key):
         3. RISCOS - Principais preocupações
         4. ALOCAÇÃO SUGERIDA - % para cada ativo na carteira
         5. GATILHOS - Quando comprar/vender
+        6. NOTÍCIA - Principais noticias macro sobre o ativo e informações que possam impactar na volatidade, tais como: governo, economia mundia, ultimos acontecimentos, tragedias, resultados e outras informações relevante que pode influenciar na volatilidade. Passa informações concletas de noticias passadas que influenciam e possiveis noticias futuras. Não seja generico seja um especialista e passa informações reias que podem influenciar 
         
         Foque em oportunidades reais com base nos dados técnicos.
         Seja prático e direto, evite jargões complexos.
@@ -504,19 +694,33 @@ with st.sidebar:
             else:
                 st.error("Erro ao remover API Key")
     
-    # Input para API Key
+    # Input para API Key - pré-preenche se já estiver salva
     api_key = st.text_input("OpenAI API Key", type="password", 
-                           value=api_key_salva,
+                           value=api_key_salva if api_key_salva else "",
+                           placeholder="Cole sua OpenAI API Key aqui...",
                            help="Obtenha em: https://platform.openai.com/api-keys")
     
     # Botão para salvar API Key
     if api_key and api_key != api_key_salva:
-        if st.button("💾 Salvar API Key"):
+        if st.button("💾 Salvar API Key Localmente"):
             if salvar_api_key(api_key):
-                st.success("API Key salva com sucesso!")
+                st.success("✅ API Key salva com sucesso! Você não precisará digitá-la novamente.")
                 st.rerun()
             else:
-                st.error("Erro ao salvar API Key")
+                st.error("❌ Erro ao salvar API Key")
+    
+    # Instruções para Streamlit Cloud
+    with st.expander("🌐 Para uso no Streamlit Cloud"):
+        st.write("""
+        **No Streamlit Cloud, adicione sua API Key em:**
+        1. Acesse [Streamlit Cloud](https://share.streamlit.io/)
+        2. No seu app, clique em ⚙️ **Settings**
+        3. Vá em **Secrets** e adicione:
+        ```
+        OPENAI_API_KEY = "sua-chave-aqui"
+        ```
+        4. A chave será carregada automaticamente!
+        """)
     
     # Informações sobre fontes de dados
     with st.expander("📊 Fontes dos Dados"):
@@ -573,11 +777,11 @@ tickers_base = {
     ],
     "FIIs": [
         "HGLG11.SA", "KNRI11.SA", "XPML11.SA", "HGRU11.SA", "VGIP11.SA", "XPLG11.SA",
-        "BCFF11.SA", "RBRF11.SA", "HSML11.SA", "VRTA11.SA"
+        "BTHF11.SA", "RBRF11.SA", "HSML11.SA", "VRTA11.SA"
     ],
     "BDRs": [
         "AAPL34.SA", "MSFT34.SA", "AMZO34.SA", "TSLA34.SA", 
-        "COCA34.SA", "DISB34.SA", "JPMO34.SA", "NVDC34.SA"
+        "COCA34.SA", "DISB34.SA", "JPMC34.SA", "NVDC34.SA"
     ],
     "ETFs": [
         "BOVA11.SA", "SMAL11.SA", "IVVB11.SA", "BBSD11.SA", "DIVO11.SA", "FIND11.SA"
@@ -696,16 +900,23 @@ with tab2:
                         with col1:
                             st.write(f"**{row['ticker']}** - {row.get('nome', '')}")
                             st.write(f"*{row['classe']}* | Setor: {row.get('sector', 'N/A')}")
+                            
+                            # Mostrar informações de dividendos se disponível
+                            if row.get('info_dividendos'):
+                                info = row['info_dividendos']
+                                ultimo_div = info.get('ultimo_dividendo', 0) or 0
+                                total_12m_val = info.get('total_12m', 0) or 0
+                                
+                                if ultimo_div > 0:
+                                    st.write(f"**Últ. Div.:** R$ {ultimo_div:.2f}")
+                                if total_12m_val > 0:
+                                    st.write(f"**Div. 12m:** R$ {total_12m_val:.2f}")
                         
                         with col2:
                             st.write(f"Preço: R$ {row['price']:.2f}")
                             if row.get('dividendYield') is not None:
                                 dy_formatado = formatar_dividend_yield(row['dividendYield'])
                                 st.markdown(f"**DY:** {dy_formatado}", unsafe_allow_html=True)
-                                
-                                # Mostra informações adicionais de dividendos se disponível
-                                if row.get('info_dividendos') and row['info_dividendos'].get('total_12m', 0) > 0:
-                                    st.write(f"Dividendos 12m: R$ {row['info_dividendos']['total_12m']:.2f}")
                         
                         with col3:
                             st.metric("Score", f"{row['Score_Final']:.1f}")
@@ -761,15 +972,167 @@ with tab3:
         # Tabela detalhada
         st.subheader("📋 Detalhes dos Ativos")
         
-        # Formatar Dividend Yield para exibição
-        df_display = df_filtrado.copy()
-        df_display['dividendYield'] = df_display['dividendYield'].apply(
-            lambda x: formatar_dividend_yield(x) if pd.notna(x) else "N/A"
-        )
+        # Legenda explicativa
+        with st.expander("ℹ️ Legenda dos Scores"):
+            st.write("""
+            **Classificação dos Scores:**
+            - **⭐ Alta (15+):** Oportunidade muito promissora
+            - **📊 Média (10-14):** Oportunidade interessante  
+            - **📈 Baixa (0-9):** Oportunidade com menor potencial
+            
+            **Cores dos Indicadores:**
+            - 🟢 **DY ≥ 6%** (Alto) | **P/L < 12** (Barato)
+            - 🟡 **DY 3-6%** (Médio) | **P/L 12-20** (Justo)  
+            - 🔴 **DY < 3%** (Baixo) | **P/L > 20** (Caro)
+            """)
         
-        st.dataframe(df_display[['ticker', 'classe', 'price', 'rsi14', 'pe', 'dividendYield', 
-                                'Score_Protecao', 'Score_Crescimento', 'Score_Final']],
-                   use_container_width=True)
+        # Exibir cada ativo com informações organizadas
+        for _, row in df_filtrado.iterrows():
+            with st.container():
+                st.markdown(f"**{row['ticker']}** | **{row['classe']}** | **Setor:** {row.get('sector', 'N/A')}")
+                
+                # Layout principal com 2 colunas
+                col_left, col_right = st.columns([3, 2])
+                
+                with col_left:
+                    # Parâmetros analisados
+                    st.markdown("**📊 Parâmetros Analisados:**")
+                    for param in row.get('parametros_classe', []):
+                        st.markdown(f'<div class="param-card">{param}</div>', unsafe_allow_html=True)
+                    
+                    # Informações de preço e indicadores
+                    col_price, col_indicators = st.columns(2)
+                    
+                    with col_price:
+                        st.write(f"**Preço:** R$ {row['price']:.2f}")
+                        rsi = row['rsi14']
+                        if pd.notna(rsi):
+                            st.write(f"**RSI:** {rsi:.1f}")
+                    
+                    with col_indicators:
+                        if row['classe'] in ["Ação BR", "Ação EUA", "BDR"]:
+                            st.markdown(f"**P/L:** {formatar_pe(row['pe'])}", unsafe_allow_html=True)
+                        
+                        if row['classe'] in ["FII", "ETF", "Ação BR", "Ação EUA", "BDR"]:
+                            st.markdown(f"**DY:** {formatar_dividend_yield(row['dividendYield'])}", unsafe_allow_html=True)
+                    
+                    # CORREÇÃO COMPLETA: Informações detalhadas de dividendos
+                    if row.get('info_dividendos'):
+                        info = row['info_dividendos']
+                        
+                        # Verificar se há informações válidas de dividendos
+                        ultimo_div = info.get('ultimo_dividendo', 0) or 0
+                        total_12m_val = info.get('total_12m', 0) or 0
+                        qtd_div = info.get('quantidade_dividendos_12m', 0) or 0
+                        dividendos_recentes = info.get('dividendos_recentes', [])
+                        forward_dividend = info.get('forward_dividend_rate', 0) or 0
+                        trailing_dividend = info.get('trailing_dividend_rate', 0) or 0
+                        
+                        # Mostrar seção de dividendos se houver qualquer dado relevante
+                        tem_dados_dividendos = (ultimo_div > 0 or total_12m_val > 0 or 
+                                               qtd_div > 0 or len(dividendos_recentes) > 0 or
+                                               forward_dividend > 0 or trailing_dividend > 0 or
+                                               (row.get('dividendYield') and row['dividendYield'] > 0))
+                        
+                        if tem_dados_dividendos:
+                            st.markdown("**💰 Informações de Dividendos:**")
+                            
+                            # Último dividendo
+                            if ultimo_div > 0:
+                                st.write(f"• **Último:** R$ {ultimo_div:.2f}")
+                            elif forward_dividend > 0:
+                                st.write(f"• **Forward Dividend:** R$ {forward_dividend:.2f}")
+                            elif trailing_dividend > 0:
+                                st.write(f"• **Trailing Dividend:** R$ {trailing_dividend:.2f}")
+                            else:
+                                st.write("• **Último:** N/A")
+                            
+                            # Total dos últimos 12 meses
+                            if total_12m_val > 0:
+                                st.write(f"• **12 meses:** R$ {total_12m_val:.2f}")
+                            elif row.get('dividendYield') and row['dividendYield'] > 0 and row.get('price'):
+                                # Calcula aproximado baseado no DY e preço
+                                if row['dividendYield'] < 1:  # Se DY está em decimal
+                                    dy_value = (row['dividendYield'] * row['price'])
+                                else:  # Se DY está em porcentagem
+                                    dy_value = (row['dividendYield'] / 100) * row['price']
+                                st.write(f"• **12 meses (estimado):** R$ {dy_value:.2f}")
+                            else:
+                                st.write("• **12 meses:** N/A")
+                            
+                            # Quantidade de pagamentos
+                            if qtd_div > 0:
+                                st.write(f"• **Pagamentos (12m):** {qtd_div}")
+                            elif row['classe'] == 'FII':
+                                st.write("• **Pagamentos (12m):** ~12 (estimado para FII)")
+                            else:
+                                st.write("• **Pagamentos (12m):** N/A")
+                            
+                            # Últimos 3 dividendos
+                           # Últimos 3 dividendos - VERSÃO DEFINITIVAMENTE CORRIGIDA
+                            if dividendos_recentes:
+                            # Pegar os últimos 3 dividendos (mais recentes)
+                                ultimos_3 = dividendos_recentes[-3:] if len(dividendos_recentes) >= 3 else dividendos_recentes   
+                                # CORREÇÃO: Garantir que todos os valores sejam floats e formatar consistentemente
+                                dividendos_formatados = []
+                                for div in ultimos_3:
+                                # Converter para float se não for
+                                    valor = float(div) if not isinstance(div, float) else div
+                                # Formatar no padrão brasileiro: R$ 0,85
+                                    dividendos_formatados.append(f"R$ {valor:.2f}".replace('.', ','))  
+                                    div_recentes_str = ", ".join(dividendos_formatados)
+                                st.write(f"• **Últimos {len(ultimos_3)}:** {div_recentes_str}")
+                            elif ultimo_div > 0:
+                                st.write(f"• **Último conhecido:** R$ {ultimo_div:.2f}")
+                            else:
+                                st.write("• **Últimos dividendos:** N/A")
+                        else:
+                            # Mostra pelo menos o dividend yield se disponível
+                            if row.get('dividendYield') and row['dividendYield'] > 0:
+                                st.markdown("**💰 Dividend Yield:**")
+                                st.write(f"• **DY:** {formatar_dividend_yield(row['dividendYield'])}", unsafe_allow_html=True)
+                            else:
+                                st.write("**💰 Dividendos:** Dados limitados disponíveis")
+                    else:
+                        # Se não tem info_dividendos, mostra pelo menos o DY se disponível
+                        if row.get('dividendYield') and row['dividendYield'] > 0:
+                            st.markdown("**💰 Dividend Yield:**")
+                            st.write(f"• **DY:** {formatar_dividend_yield(row['dividendYield'])}", unsafe_allow_html=True)
+                        else:
+                            st.write("**💰 Dividendos:** Informações não disponíveis")
+                
+                with col_right:
+                    # Scores com destaque
+                    st.markdown("**🎯 Scores:**")
+                    
+                    # Score Final com destaque visual
+                    score_final = row['Score_Final']
+                    if score_final >= 15:
+                        st.success(f"**Score Final: {score_final:.1f}** ⭐ ALTA")
+                    elif score_final >= 10:
+                        st.info(f"**Score Final: {score_final:.1f}** 📊 MÉDIA")
+                    else:
+                        st.warning(f"**Score Final: {score_final:.1f}** 📈 BAIXA")
+                    
+                    # Scores individuais
+                    st.write(f"**Proteção:** {row['Score_Protecao']:.1f}")
+                    st.write(f"**Crescimento:** {row['Score_Crescimento']:.1f}")
+                    
+                    # Explicação dos scores
+                    with st.expander("📖 Sobre os Scores"):
+                        st.write(f"""
+                        **Como interpretar:**
+                        - **Score Final {score_final:.1f}:** Avaliação geral baseada na estratégia "{strategy}"
+                        - **Proteção {row['Score_Protecao']:.1f}:** Capacidade de preservar capital
+                        - **Crescimento {row['Score_Crescimento']:.1f}:** Potencial de valorização
+                        
+                        **Classificação:**
+                        - ⭐ **ALTA (15+):** Oportunidade muito promissora
+                        - 📊 **MÉDIA (10-14):** Oportunidade interessante  
+                        - 📈 **BAIXA (0-9):** Oportunidade com menor potencial
+                        """)
+                
+                st.markdown("---")
         
         # Análise GPT
         if st.button("🤖 Obter Análise IA") and api_key:
@@ -794,25 +1157,42 @@ with tab4:
             
             for _, row in df_novos.iterrows():
                 with st.expander(f"🚀 {row['ticker']} - Score Crescimento: {row['Score_Crescimento']:.1f}"):
-                    col1, col2 = st.columns(2)
+                    col1, col2, col3 = st.columns([2, 2, 2])
                     
                     with col1:
                         st.write(f"**Classe:** {row['classe']}")
                         st.write(f"**Preço:** R$ {row['price']:.2f}")
                         st.write(f"**Setor:** {row.get('sector', 'N/A')}")
-                        if row.get('info_dividendos'):
-                            info = row['info_dividendos']
-                            if info.get('total_12m', 0) > 0:
-                                st.write(f"**Dividendos 12m:** R$ {info['total_12m']:.2f}")
+                        
+                        # Parâmetros principais da classe
+                        st.markdown("**📊 Parâmetros Chave:**")
+                        principais_params = row.get('parametros_classe', [])[:2]
+                        for param in principais_params:
+                            st.write(f"• {param}")
                     
                     with col2:
                         if row.get('rsi14'):
                             st.write(f"**RSI:** {row['rsi14']:.1f}")
-                        if row.get('pe'):
-                            st.write(f"**P/L:** {row['pe']:.1f}")
-                        if row.get('dividendYield') is not None:
-                            dy_formatado = formatar_dividend_yield(row['dividendYield'])
-                            st.markdown(f"**DY:** {dy_formatado}", unsafe_allow_html=True)
+                        if row['classe'] in ["Ação BR", "Ação EUA", "BDR"]:
+                            st.markdown(f"**P/L:** {formatar_pe(row['pe'])}", unsafe_allow_html=True)
+                        if row['classe'] in ["FII", "ETF", "Ação BR", "Ação EUA", "BDR"]:
+                            st.markdown(f"**DY:** {formatar_dividend_yield(row['dividendYield'])}", unsafe_allow_html=True)
+                    
+                    with col3:
+                        # Informações de dividendos detalhadas
+                        if row.get('info_dividendos'):
+                            info = row['info_dividendos']
+                            st.write("**💰 Dividendos:**")
+                            
+                            # CORREÇÃO: Usar valores padrão 0 se for None
+                            ultimo_div = info.get('ultimo_dividendo', 0) or 0
+                            total_12m_val = info.get('total_12m', 0) or 0
+                            
+                            if ultimo_div > 0:
+                                st.write(f"• **Último:** R$ {ultimo_div:.2f}".replace('.', ','))
+                            
+                            if total_12m_val > 0:
+                                st.write(f"• **12 meses:** R$ {total_12m_val:.2f}".replace('.', ','))
         
         # Gráfico de novas descobertas
         if not df_novos.empty:
@@ -823,7 +1203,7 @@ with tab4:
     else:
         st.info("Execute a análise para descobrir novas oportunidades")
 
-# Rodapé com horário correto
+# Rodapé com horário correto de Brasília
 st.markdown("---")
 st.markdown(
     "⚠️ **Aviso Legal:** Esta ferramenta é apenas para fins educacionais. "
@@ -831,5 +1211,5 @@ st.markdown(
 )
 st.markdown(
     f"📊 **Fontes de Dados:** Yahoo Finance, Banco Central do Brasil, OpenAI GPT-4 | "
-    f"🔄 **Última atualização:** {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    f"🔄 **Última atualização:** {obter_horario_brasilia()} (Horário de Brasília)"
 )
