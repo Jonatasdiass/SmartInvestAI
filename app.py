@@ -444,24 +444,50 @@ def obter_parametros_por_classe(classe):
 # FUNÇÕES PRINCIPAIS DO SISTEMA
 # =============================================================================
 
+def selecionar_ativos_balanceados(asset_classes, max_por_classe=5):
+    """Seleciona ativos de forma balanceada entre as classes"""
+    import random
+    
+    selecionados = []
+    
+    for classe in asset_classes:
+        if classe in tickers_base:
+            # Pega uma amostra aleatória de cada classe
+            tickers_classe = tickers_base[classe]
+            # Garante que não tente pegar mais tickers do que existem
+            num_selecionar = min(max_por_classe, len(tickers_classe))
+            amostra = random.sample(tickers_classe, num_selecionar)
+            selecionados.extend(amostra)
+    
+    return selecionados
+
 @st.cache_data(ttl=3600)  # Cache de 1 hora
 def descobrir_ativos_automaticamente():
-    """Descobre automaticamente ativos promissores"""
+    """Descobre automaticamente ativos promissores com mais diversidade"""
+    import random
+    
+    # Grupos de ativos por setor/segmento para maior diversificação
+    grupos_ativos = {
+        "tech_finance": ["CASH3.SA", "COGN3.SA", "BIDI11.SA", "STOC31.SA", "ORCL34.SA"],
+        "energia_util": ["ENGI11.SA", "EQTL3.SA", "CPLE6.SA", "TAEE11.SA", "CMIG4.SA"],
+        "varejo_consumo": ["MGLU3.SA", "AMER3.SA", "VIIA3.SA", "LREN3.SA", "PCAR3.SA"],
+        "materiais_ind": ["KLBN4.SA", "SUZB3.SA", "GGBR4.SA", "CSNA3.SA", "VALE3.SA"],
+        "fiis_diversos": ["KNRI11.SA", "HGLG11.SA", "XPML11.SA", "VRTA11.SA", "HGRU11.SA"],
+        "bdr_global": ["AAPL34.SA", "MSFT34.SA", "TSLA34.SA", "META34.SA", "NVDC34.SA"],
+        "small_caps": ["MDNE3.SA", "LEVE3.SA", "RADL3.SA", "AZEV4.SA", "VAMO3.SA"]
+    }
+    
+    # Seleciona aleatoriamente de cada grupo para garantir diversidade
     novos_tickers = set()
+    for grupo, tickers in grupos_ativos.items():
+        # Seleciona 2-3 tickers de cada grupo aleatoriamente
+        num_selecionar = min(random.randint(2, 3), len(tickers))
+        selecionados = random.sample(tickers, num_selecionar)
+        novos_tickers.update(selecionados)
     
-    # IPOs conhecidos recentemente (ATUALIZADO)
-    ipos_recentes = [
-        "RAIZ4.SA", "VAMO3.SA", "AZEV4.SA", 
-        "LEVE3.SA", "CASH3.SA", "MDNE3.SA", "KLBN4.SA"
-    ]
-    novos_tickers.update(ipos_recentes)
-    
-    # Ações com alto volume (ATUALIZADO)
-    alto_volume = [
-        "MGLU3.SA", "COGN3.SA", "LWSA3.SA", 
-        "PETZ3.SA", "AMER3.SA", "RADL3.SA", "CPLE6.SA"
-    ]
-    novos_tickers.update(alto_volume)
+    # Garante alguns ativos fixos importantes
+    tickers_fixos = ["PETR4.SA", "ITUB4.SA", "BOVA11.SA", "IVVB11.SA"]
+    novos_tickers.update(tickers_fixos)
     
     return list(novos_tickers)
 
@@ -613,7 +639,7 @@ def calcular_score_crescimento(row):
     return score
 
 def analisar_com_gpt(df, strategy, horizon, api_key):
-    """Analisa oportunidades usando GPT"""
+    """Analisa oportunidades usando GPT com contexto mais rico"""
     if not api_key:
         return "⚠️ Adicione sua OpenAI API Key para obter análise detalhada"
     
@@ -631,42 +657,58 @@ def analisar_com_gpt(df, strategy, horizon, api_key):
                 else:
                     dados_analise.at[i, 'dividendYield'] = f"{row['dividendYield']:.2f}%"
         
+        # Prompt muito mais detalhado e específico
         prompt = f"""
-        Como analista financeiro especializado, analise estas oportunidades:
-        
-        Estratégia: {strategy}
-        Horizonte: {horizon}
-        
-        DADOS ATUALIZADOS DOS ATIVOS:
-        {dados_analise[['ticker', 'classe', 'price', 'rsi14', 'pe', 'dividendYield', 'Score_Final']].to_string()}
-        
-        CONTEXTO MACRO ATUAL:
+        Como analista financeiro especializado no mercado brasileiro, analise estas oportunidades:
+
+        ESTRATÉGIA SOLICITADA: {strategy}
+        HORIZONTE TEMPORAL: {horizon}
+
+        DADOS TÉCNICOS DOS ATIVOS (TOP 15):
+        {dados_analise[['ticker', 'classe', 'price', 'rsi14', 'pe', 'dividendYield', 'sector', 'Score_Final']].to_string()}
+
+        CONTEXTO MACROECONÔMICO ATUAL (Setembro/2025):
         - CDI: 13.31% a.a. | Selic: 13.31% a.a. | IPCA: 4.25% a.a.
-        - Ibovespa: 148.633 pts | Dólar: R$ 5,36
-        - Cenário: Juros altos, inflação controlada
-        
-        Forneça uma análise com:
-        1. TOP 3 OPORTUNIDADES - Justificativa técnica detalhada
-        2. ALAVANCAGENS - O que pode valorizar cada ativo
-        3. RISCOS - Principais preocupações
-        4. ALOCAÇÃO SUGERIDA - % para cada ativo na carteira
-        5. GATILHOS - Quando comprar/vender
-        6. NOTÍCIA - Principais noticias macro sobre o ativo e informações que possam impactar na volatidade, tais como: governo, economia mundia, ultimos acontecimentos, tragedias, resultados e outras informações relevante que pode influenciar na volatilidade. Passa informações concletas de noticias passadas que influenciam e possiveis noticias futuras. Não seja generico seja um especialista e passa informações reias que podem influenciar 
-        
-        Foque em oportunidades reais com base nos dados técnicos.
-        Seja prático e direto, evite jargões complexos.
+        - Ibovespa: ~154.063 pts | Dólar: R$ 5,33
+        - Cenário: Juros em patamar elevado, inflação controlada, crescimento moderado
+
+        SETORES E TENDÊNCIAS DO MERCADO:
+        - Tecnologia & Pagamentos: CASH3, COGN3 - Setor em expansão com digitalização
+        - Energia & Utilities: EQTL3, CPLE6 - Transição energética e estabilidade
+        - Varejo & Consumo: MGLU3, AMER3 - Sensível ao ciclo econômico
+        - Materiais & Industrial: KLBN4, GGBR4 - Commodities e infraestrutura
+        - FIIs: KNRI11, HGLG11 - Sensíveis a taxa de juros, bom para renda
+        - BDRs: AAPL34, MSFT34 - Exposição internacional, diversificação
+
+        INSTRUÇÕES ESPECÍFICAS:
+        1. CORRIJA SETORES ERRADOS: CASH3 é pagamentos/digital, não energia
+        2. DIVERSIFIQUE: Não recomende apenas FIIs ou apenas ações
+        3. CONTEXTO REAL: Considere notícias recentes e tendências de mercado
+        4. CENÁRIO DE JUROS: Analise impacto dos juros altos em cada classe
+        5. HORIZONTE TEMPORAL: Adeque recomendações ao prazo solicitado
+
+        ESTRUTURA DA RESPOSTA:
+        1. 🎯 TOP 5 OPORTUNIDADES - Justifique tecnicamente cada escolha
+        2. 📊 ANÁLISE SETORIAL - Como cada setor se comporta no cenário atual
+        3. ⚠️ PRINCIPAIS RISCOS - Específicos para cada recomendação
+        4. 💰 ALOCAÇÃO SUGERIDA - % ideal para cada ativo na carteira
+        5. 🔄 GATILHOS OPERACIONAIS - Quando entrar/sair de cada posição
+
+        Seja PRÁTICO, ESPECÍFICO e baseie-se em DADOS REAIS do mercado.
+        Evite recomendações genéricas - seja específico para cada ativo.
         """
         
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2000
+            max_tokens=2500,
+            temperature=0.7  # Um pouco mais criativo
         )
         
         return response.choices[0].message.content
     except Exception as e:
         return f"Erro na análise GPT: {str(e)}"
-
+    
 # =============================================================================
 # INTERFACE PRINCIPAL
 # =============================================================================
@@ -773,18 +815,21 @@ tickers_base = {
     "Ações Brasileiras": [
         "PETR4.SA", "VALE3.SA", "ITUB4.SA", "BBDC4.SA", "ABEV3.SA", "WEGE3.SA",
         "MGLU3.SA", "BBAS3.SA", "B3SA3.SA", "RENT3.SA", "LREN3.SA", "EQTL3.SA",
-        "RADL3.SA", "SBSP3.SA", "CSAN3.SA", "EMBR3.SA", "GGBR4.SA", "CYRE3.SA"
+        "RADL3.SA", "SBSP3.SA", "CSAN3.SA", "EMBR3.SA", "GGBR4.SA", "CYRE3.SA",
+        "COGN3.SA", "CASH3.SA", "KLBN4.SA", "RAIZ4.SA", "AZEV4.SA"
     ],
     "FIIs": [
         "HGLG11.SA", "KNRI11.SA", "XPML11.SA", "HGRU11.SA", "VGIP11.SA", "XPLG11.SA",
-        "BTHF11.SA", "RBRF11.SA", "HSML11.SA", "VRTA11.SA"
+        "BCFF11.SA", "RBRF11.SA", "HSML11.SA", "VRTA11.SA", "MXRF11.SA", "RCRB11.SA"
     ],
     "BDRs": [
         "AAPL34.SA", "MSFT34.SA", "AMZO34.SA", "TSLA34.SA", 
-        "COCA34.SA", "DISB34.SA", "JPMC34.SA", "NVDC34.SA"
+        "COCA34.SA", "DISB34.SA", "JPMO34.SA", "NVDC34.SA",
+        "META34.SA", "GOOG34.SA", "NFLX34.SA"
     ],
     "ETFs": [
-        "BOVA11.SA", "SMAL11.SA", "IVVB11.SA", "BBSD11.SA", "DIVO11.SA", "FIND11.SA"
+        "BOVA11.SA", "SMAL11.SA", "IVVB11.SA", "BBSD11.SA", "DIVO11.SA", "FIND11.SA",
+        "GOVE11.SA", "IMAB11.SA", "SPXI11.SA"
     ],
     "Renda Fixa": ["CDI", "SELIC", "IPCA"]
 }
@@ -856,11 +901,17 @@ with tab2:
                 if classe in tickers_base:
                     todos_tickers.extend(tickers_base[classe])
             
+            # Coletar tickers de forma balanceada
+            todos_tickers = selecionar_ativos_balanceados(asset_classes, max_por_classe=4)
             # Busca automática
             if auto_discover:
                 novos_tickers = descobrir_ativos_automaticamente()
                 st.session_state.novos_tickers = novos_tickers
-                todos_tickers.extend(novos_tickers)
+                for ticker in novos_tickers:
+                    if ticker not in todos_tickers:
+                        todos_tickers.append(ticker)
+
+            st.info(f"🔍 Analisando {len(todos_tickers)} ativos selecionados balanceadamente...")
             
             # Coletar dados
             dados = []
