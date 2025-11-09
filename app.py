@@ -825,7 +825,7 @@ tickers_base = {
     "BDRs": [
         "AAPL34.SA", "MSFT34.SA", "AMZO34.SA", "TSLA34.SA", 
         "COCA34.SA", "DISB34.SA", "JPMO34.SA", "NVDC34.SA",
-        "META34.SA", "GOOG34.SA", "NFLX34.SA"
+        "M1TA34.SA", "GOGL34.SA", "NFLX34.SA"
     ],
     "ETFs": [
         "BOVA11.SA", "SMAL11.SA", "IVVB11.SA", "BBSD11.SA", "DIVO11.SA", "FIND11.SA",
